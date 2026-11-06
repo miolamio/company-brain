@@ -33,3 +33,25 @@ MODEL_API_KEY=""
 # (1,000 credits a month). Set a key for more, or a context.dev key to use that.
 # FIRECRAWL_API_KEY=""
 # CONTEXT_DEV_API_KEY=""
+
+# Public HTTPS origin of this worker. Local dev needs it: Slack only redirects
+# to https, and localhost origins are never remembered. Set it to your tunnel
+# URL. Deployed workers learn it from the first request.
+# PUBLIC_URL="https://your-tunnel.example.com"
+
+# GitHub connector: create a GitHub OAuth app with the authorization callback
+# URL <PUBLIC_URL>/brain/mcp-connections/callback.
+# GITHUB_MCP_CLIENT_ID=""
+# GITHUB_MCP_CLIENT_SECRET=""
+
+# Gmail connector (read-only, personal): create a Google Cloud OAuth client
+# (web application) with the Gmail API enabled and the redirect URI
+# <PUBLIC_URL>/brain/mcp-connections/callback.
+# GOOGLE_WORKSPACE_CLIENT_ID=""
+# GOOGLE_WORKSPACE_CLIENT_SECRET=""
+
+# Route model calls through Cloudflare AI Gateway. Takes effect only when all
+# three are set.
+# CLOUDFLARE_ACCOUNT_ID=""
+# AI_GATEWAY_NAME=""
+# AI_GATEWAY_TOKEN=""
