@@ -53,6 +53,22 @@ export function cleanMention(text: string | undefined): string {
 		.trim()
 }
 
+/**
+ * Stand-in for the question of a message that mentions the bot with no other
+ * text. Only internal turn bookkeeping and the active-turn steering gate see
+ * it: the model prompt is built from the Slack message itself, and nothing
+ * here is written to memory or shown to users.
+ */
+export const BARE_MENTION_QUESTION = "(mentioned with no message)"
+
+/** The cleaned question, or a placeholder for a bare mention so it is answered, not dropped. */
+export function questionForMessage(
+	text: string | undefined,
+	isMention: boolean,
+): string {
+	return cleanMention(text) || (isMention ? BARE_MENTION_QUESTION : "")
+}
+
 function currentDateFor(
 	tzOffsetSeconds: number | undefined,
 	now: number,

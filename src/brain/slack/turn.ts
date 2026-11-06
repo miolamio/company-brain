@@ -24,6 +24,7 @@ import {
 	isConnectOnlyRequest,
 	isOurSlackBotMessage,
 	originalRequestForConnectAcceptance,
+	questionForMessage,
 } from "../prompt/build"
 import { getCatalogEntry, isMcpCatalogSlug } from "../tools/mcp/catalog"
 import { startMcpConnect } from "../tools/mcp/connect"
@@ -1932,7 +1933,7 @@ async function runSlackTurnInner(
 	const skipReactions = opts?.skipReactions === true
 	const passiveInvestigation = opts?.passiveInvestigation
 
-	const question = cleanMention(ev.text)
+	const question = questionForMessage(ev.text, isMention)
 	if (!question) {
 		if (storedEventIdentity) {
 			markStoredEventFiltered(
