@@ -112,15 +112,8 @@ export async function classifyMcpOperation(args: {
 	classifier: McpApprovalClassifier
 	effectOverride?: McpOperationEffect
 }): Promise<{ effect: McpOperationEffect; source: string; reason: string }> {
-	if (args.effectOverride) {
-		return {
-			effect: args.effectOverride,
-			source: "router_contract",
-			reason: "The decoded router operation has an explicit host contract.",
-		}
-	}
 	// A query tool's name says nothing about what its SQL does. Look at the SQL
-	// before trusting annotations or the "query" read verb.
+	// before trusting a router claim, annotations or the "query" read verb.
 	if (queryToolCallHasDdl(args.method, args.input)) {
 		return {
 			effect: "destructive",
@@ -132,7 +125,14 @@ export async function classifyMcpOperation(args: {
 		return {
 			effect: "material_write",
 			source: "sql_dml",
-			reason: "The SQL in this call inserts, updates or deletes data.",
+			reason: "The SQL in this call is not provably read-only (it may change data or state).",
+		}
+	}
+	if (args.effectOverride) {
+		return {
+			effect: args.effectOverride,
+			source: "router_contract",
+			reason: "The decoded router operation has an explicit host contract.",
 		}
 	}
 	const annotated = annotatedOperationEffect({

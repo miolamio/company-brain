@@ -108,6 +108,21 @@ describe("queryToolCallHasDml", () => {
 	})
 })
 
+describe("router contract does not skip the SQL check", () => {
+	it("a router metadata claim still pauses on a write", async () => {
+		const classified = await classifyMcpOperation({
+			serverSlug: "db",
+			method: "run_sql",
+			inputSchema: {},
+			input: { sql: "DELETE FROM t" },
+			trustedAnnotations: false,
+			classifier: { classify: async () => ({ effect: "read", reason: "" }), callsUsed: () => 0 },
+			effectOverride: "metadata",
+		})
+		expect(classified.source).toBe("sql_dml")
+	})
+})
+
 describe("approval decision for query tools", () => {
 	it("TC-1 `query` with DELETE now pauses for approval (was: ran with no card)", async () => {
 		const r = await decide({ method: "query", input: { sql: "DELETE FROM customers" } })
