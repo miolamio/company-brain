@@ -61,8 +61,40 @@ export function publicApiOrigin(env: Env, reqUrl: string): string {
 export async function startMcpConnect(
 	args: StartMcpConnectArgs,
 ): Promise<StartMcpConnectResult> {
-	const result = await startProviderConnect(args)
+	return recordConnectApproval(args, await startProviderConnect(args))
+}
+
+/** Allow https, and http only for loopback hosts. */
+export function authorizationUrlIsSafe(value: string): boolean {
+	try {
+		const url = new URL(value)
+		if (url.protocol === "https:") return true
+		return (
+			url.protocol === "http:" &&
+			["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+		)
+	} catch {
+		return false
+	}
+}
+
+// Stores who may approve the flow and where the provider consent page is, and
+// hands back our own /authorize link instead of the raw provider URL.
+export async function recordConnectApproval(
+	args: Pick<StartMcpConnectArgs, "env" | "userId" | "callbackOrigin">,
+	result: StartMcpConnectResult,
+): Promise<StartMcpConnectResult> {
 	if (!result.ok || !("authUrl" in result)) return result
+	if (!authorizationUrlIsSafe(result.authUrl)) {
+		await db(args.env)
+			.delete(mcpOAuthState)
+			.where(eq(mcpOAuthState.stateToken, result.stateToken))
+		return {
+			ok: false,
+			error: "the server returned an unsafe authorization URL",
+			status: 502,
+		}
+	}
 
 	const [row] = await db(args.env)
 		.select({ context: mcpOAuthState.context })
