@@ -1,4 +1,5 @@
 import { Hono } from "hono"
+import { deleteCookie, getCookie, setCookie } from "hono/cookie"
 import { asc, db, eq, sql } from "@repo/db"
 import { member, organization, user } from "@repo/db/schema/auth"
 import { slackWorkspace } from "@repo/db/schema/slack"
@@ -8,6 +9,48 @@ import type { AppContext } from "@/types"
 import { endSession, startSession } from "./session"
 
 const STATE_TTL_SECONDS = 600
+const LOGIN_COOKIE = "slack_login_state"
+const LOGIN_COOKIE_PATH = "/auth/slack"
+const RETURN_PREFIX = "/brain/mcp-connections/"
+
+/** Only same-origin relative paths under the MCP connection routes. */
+export function safeReturnTo(value: string | undefined | null): string | null {
+	if (!value || !value.startsWith(RETURN_PREFIX)) return null
+	for (const ch of value) {
+		if (ch === "\\" || ch.charCodeAt(0) < 32) return null
+	}
+	if (value.includes("//")) return null
+	try {
+		const url = new URL(value, "http://local.invalid")
+		if (url.origin !== "http://local.invalid") return null
+		if (!url.pathname.startsWith(RETURN_PREFIX)) return null
+		return `${url.pathname}${url.search}`
+	} catch {
+		return null
+	}
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+	const x = new TextEncoder().encode(a)
+	const y = new TextEncoder().encode(b)
+	let diff = x.length ^ y.length
+	for (let i = 0; i < Math.max(x.length, y.length); i++) {
+		diff |= (x[i] ?? 0) ^ (y[i] ?? 0)
+	}
+	return diff === 0
+}
+
+function idTokenNonce(idToken: string | undefined): string | null {
+	const payload = idToken?.split(".")[1]
+	if (!payload) return null
+	try {
+		const padded = payload.replace(/-/g, "+").replace(/_/g, "/")
+		const claims = JSON.parse(atob(padded)) as { nonce?: unknown }
+		return typeof claims.nonce === "string" ? claims.nonce : null
+	} catch {
+		return null
+	}
+}
 
 type SlackIdentity = {
 	ok: boolean
@@ -109,15 +152,28 @@ export const authRoutes = new Hono<AppContext>()
 		if (!credentials) return c.redirect("/setup")
 
 		const state = crypto.randomUUID()
-		await c.env.BRAIN_KV.put(`auth:slack:${state}`, "1", {
-			expirationTtl: STATE_TTL_SECONDS,
+		const nonce = crypto.randomUUID()
+		const returnTo = safeReturnTo(c.req.query("return_to"))
+		await c.env.BRAIN_KV.put(
+			`auth:slack:${state}`,
+			JSON.stringify({ nonce, returnTo }),
+			{ expirationTtl: STATE_TTL_SECONDS },
+		)
+		// Binds the flow to this browser: a callback link forwarded to someone
+		// else carries a state their browser never started.
+		setCookie(c, LOGIN_COOKIE, state, {
+			path: LOGIN_COOKIE_PATH,
+			httpOnly: true,
+			secure: new URL(c.req.url).protocol === "https:",
+			sameSite: "Lax",
+			maxAge: STATE_TTL_SECONDS,
 		})
 		const url = new URL("https://slack.com/openid/connect/authorize")
 		url.searchParams.set("response_type", "code")
 		url.searchParams.set("scope", "openid email profile")
 		url.searchParams.set("client_id", credentials.clientId)
 		url.searchParams.set("state", state)
-		url.searchParams.set("nonce", crypto.randomUUID())
+		url.searchParams.set("nonce", nonce)
 		url.searchParams.set(
 			"redirect_uri",
 			signInCallbackUrl(origin(c.env, c.req.url)),
@@ -127,12 +183,29 @@ export const authRoutes = new Hono<AppContext>()
 	.get("/slack/callback", async (c) => {
 		const code = c.req.query("code")
 		const state = c.req.query("state")
-		if (c.req.query("error")) return c.redirect("/")
-		if (!code || !state) return refuse("Slack didn't send a sign-in code.", 400)
-		if (!(await c.env.BRAIN_KV.get(`auth:slack:${state}`))) {
-			return refuse("That sign-in link expired. Try again.", 400)
+		const cookieState = getCookie(c, LOGIN_COOKIE)
+		deleteCookie(c, LOGIN_COOKIE, { path: LOGIN_COOKIE_PATH })
+		if (c.req.query("error")) {
+			if (state && cookieState && timingSafeEqual(cookieState, state)) {
+				await c.env.BRAIN_KV.delete(`auth:slack:${state}`)
+			}
+			return c.redirect("/")
 		}
+		if (!code || !state) return refuse("Slack didn't send a sign-in code.", 400)
+		if (!cookieState || !timingSafeEqual(cookieState, state)) {
+			return refuse(
+				"That sign-in link wasn't started in this browser. Start again from the sign-in page.",
+				400,
+			)
+		}
+		const stored = await c.env.BRAIN_KV.get(`auth:slack:${state}`)
+		if (!stored) return refuse("That sign-in link expired. Try again.", 400)
 		await c.env.BRAIN_KV.delete(`auth:slack:${state}`)
+		let flow: { nonce?: string; returnTo?: string | null } = {}
+		try {
+			flow = JSON.parse(stored)
+		} catch {}
+		if (!flow.nonce) return refuse("That sign-in link expired. Try again.", 400)
 
 		const credentials = await slackCredentials(c.env)
 		if (!credentials) return c.redirect("/setup")
@@ -153,9 +226,16 @@ export const authRoutes = new Hono<AppContext>()
 			ok: boolean
 			error?: string
 			access_token?: string
+			id_token?: string
 		}
 		if (!tokenResponse.ok || !tokenResponse.access_token) {
 			return refuse(`Slack refused the sign-in (${tokenResponse.error ?? "unknown error"}).`)
+		}
+		// The id_token comes straight from Slack's token endpoint over TLS, so
+		// only its nonce needs checking (OIDC Core 3.1.3.7).
+		const tokenNonce = idTokenNonce(tokenResponse.id_token)
+		if (!tokenNonce || !timingSafeEqual(tokenNonce, flow.nonce)) {
+			return refuse("Slack's sign-in response didn't match this attempt.", 400)
 		}
 
 		const identity = (await fetch(
@@ -233,7 +313,7 @@ export const authRoutes = new Hono<AppContext>()
 			.from(slackWorkspace)
 			.where(eq(slackWorkspace.orgId, claimed.org.id))
 			.limit(1)
-		return c.redirect(installed ? "/" : "/setup")
+		return c.redirect(installed ? (safeReturnTo(flow.returnTo) ?? "/") : "/setup")
 	})
 	.post("/logout", (c) => {
 		endSession(c)
