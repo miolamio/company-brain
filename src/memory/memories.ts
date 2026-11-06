@@ -237,32 +237,72 @@ export type BrainDocumentStatus = {
 	dreamingStatus: string | null
 }
 
-/** Processing status for documents the brain wrote, keyed by id. */
-export async function documentStatuses(
+export type BrainDocumentLookup =
+	| { kind: "ok"; status: BrainDocumentStatus }
+	| { kind: "not_found" }
+	| { kind: "unknown" }
+
+function isNotFound(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { status?: unknown }).status === 404
+	)
+}
+
+/**
+ * Looks each document up and keeps why a lookup failed: a 404 means the
+ * document is gone, any other error (network, 5xx, rate limit) says nothing
+ * about it.
+ */
+export async function documentLookups(
 	env: Env,
 	ids: string[],
-): Promise<Map<string, BrainDocumentStatus>> {
+): Promise<Map<string, BrainDocumentLookup>> {
 	const client = memoryClient(env)
+	const unique = [...new Set(ids)]
 	const settled = await Promise.allSettled(
-		[...new Set(ids)].map((id) => client.documents.get(id)),
+		unique.map((id) => client.documents.get(id)),
 	)
-	const statuses = new Map<string, BrainDocumentStatus>()
-	for (const outcome of settled) {
-		if (outcome.status !== "fulfilled") continue
+	const lookups = new Map<string, BrainDocumentLookup>()
+	settled.forEach((outcome, index) => {
+		const id = unique[index] as string
+		if (outcome.status === "rejected") {
+			lookups.set(
+				id,
+				isNotFound(outcome.reason) ? { kind: "not_found" } : { kind: "unknown" },
+			)
+			return
+		}
 		const document = outcome.value as {
 			id: string
 			status: string
 			metadata?: unknown
 		}
 		const metadata = document.metadata as Record<string, unknown> | undefined
-		statuses.set(document.id, {
-			id: document.id,
-			status: document.status,
-			dreamingStatus:
-				typeof metadata?.dreamingStatus === "string"
-					? metadata.dreamingStatus
-					: null,
+		lookups.set(id, {
+			kind: "ok",
+			status: {
+				id: document.id,
+				status: document.status,
+				dreamingStatus:
+					typeof metadata?.dreamingStatus === "string"
+						? metadata.dreamingStatus
+						: null,
+			},
 		})
+	})
+	return lookups
+}
+
+/** Processing status for documents the brain wrote, keyed by id. */
+export async function documentStatuses(
+	env: Env,
+	ids: string[],
+): Promise<Map<string, BrainDocumentStatus>> {
+	const statuses = new Map<string, BrainDocumentStatus>()
+	for (const lookup of (await documentLookups(env, ids)).values()) {
+		if (lookup.kind === "ok") statuses.set(lookup.status.id, lookup.status)
 	}
 	return statuses
 }

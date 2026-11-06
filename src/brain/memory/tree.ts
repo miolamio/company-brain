@@ -1,7 +1,7 @@
 import { runInDbScope } from "@repo/db"
 import { getBrainDocument } from "../../memory/documents"
 import {
-	documentStatuses,
+	documentLookups,
 	memoriesForDocuments,
 	updateMemoryMetadata,
 } from "../../memory/memories"
@@ -88,6 +88,8 @@ export type BrainNodeMapping = {
 	documentId: string
 	containerTag: string
 	nodePath: string
+	/** Epoch ms the mapping was first written; absent when unknown. */
+	createdAt?: number
 }
 
 export type HydratedBrainNodeMemory = {
@@ -234,13 +236,14 @@ export function listBrainMemoryNodeMappings(
 		document_id: string
 		container_tag: string
 		node_path: string
+		created_at: number
 	}
 	const rows: Row[] = []
 	for (const containerTag of containerTags) {
 		for (let offset = 0; ; offset += MAPPING_PAGE_SIZE) {
 			const page = params.descendants
 				? agent.sql<Row>`
-						SELECT document_id, container_tag, node_path
+						SELECT document_id, container_tag, node_path, created_at
 						FROM brain_memory_node
 						WHERE container_tag = ${containerTag}
 							AND (node_path = ${nodePath} OR node_path GLOB ${descendantPattern})
@@ -248,7 +251,7 @@ export function listBrainMemoryNodeMappings(
 						LIMIT ${MAPPING_PAGE_SIZE} OFFSET ${offset}
 					`
 				: agent.sql<Row>`
-						SELECT document_id, container_tag, node_path
+						SELECT document_id, container_tag, node_path, created_at
 						FROM brain_memory_node
 						WHERE container_tag = ${containerTag} AND node_path = ${nodePath}
 						ORDER BY document_id
@@ -262,6 +265,7 @@ export function listBrainMemoryNodeMappings(
 		documentId: row.document_id,
 		containerTag: row.container_tag,
 		nodePath: row.node_path,
+		createdAt: row.created_at,
 	}))
 }
 
@@ -278,28 +282,41 @@ function deleteBrainMemoryNodeMappings(
 	}
 }
 
+// A document the API cannot find yet may just not be visible right after the
+// write, so a young mapping is not dropped on a 404.
+export const NOT_FOUND_GRACE_MS = 10 * 60 * 1000
+
+/**
+ * Drops mappings whose document failed processing or no longer exists (404).
+ * A lookup that errored for any other reason proves nothing, so that mapping
+ * stays.
+ */
 export async function reconcileBrainMemoryNodeMappings(
 	env: Env,
 	orgId: string,
 	agent: CompanyBrainAgent,
 	mappings: BrainNodeMapping[],
+	now = Date.now(),
 ): Promise<BrainNodeMapping[]> {
-	const valid = new Set<string>()
-	const byId = new Map(mappings.map((mapping) => [mapping.documentId, mapping]))
-	const documentIds = [...byId.keys()]
+	const documentIds = [...new Set(mappings.map((m) => m.documentId))]
 	const pages = await mapWithConcurrency(
 		chunksOf(documentIds, HYDRATION_DOCUMENT_ID_CHUNK),
 		POSTGRES_QUERY_CONCURRENCY,
-		(chunk) => documentStatuses(env, chunk),
+		(chunk) => documentLookups(env, chunk),
 	)
-	for (const statuses of pages) {
-		for (const row of statuses.values()) {
-			if (row.status !== "failed") valid.add(row.id)
-		}
+	const lookups = new Map(pages.flatMap((page) => [...page]))
+	const isStale = (mapping: BrainNodeMapping): boolean => {
+		const lookup = lookups.get(mapping.documentId)
+		if (!lookup || lookup.kind === "unknown") return false
+		if (lookup.kind === "ok") return lookup.status.status === "failed"
+		return (
+			mapping.createdAt === undefined ||
+			now - mapping.createdAt >= NOT_FOUND_GRACE_MS
+		)
 	}
-	const stale = mappings.filter((mapping) => !valid.has(mapping.documentId))
-	deleteBrainMemoryNodeMappings(agent, stale)
-	return mappings.filter((mapping) => valid.has(mapping.documentId))
+	const stale = new Set(mappings.filter(isStale))
+	deleteBrainMemoryNodeMappings(agent, [...stale])
+	return mappings.filter((mapping) => !stale.has(mapping))
 }
 
 export function repointBrainMemoryNodes(
