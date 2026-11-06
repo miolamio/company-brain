@@ -4,3 +4,8 @@ dist/
 .wrangler/
 .DS_Store
 dist-brain/
+.env
+.env.*
+!.env.example
+# Local notes, eval data and memory exports: never published
+.dev/
