@@ -142,8 +142,29 @@ export async function runSlackMembershipEvent(
 	const botUserId = await ensureWorkspaceBotUserId(env, ws, botToken)
 	const isBot = Boolean(botUserId) && user === botUserId
 
+	await applyMembershipEvent(
+		agent,
+		{ channel, user, isLeave, isBot },
+		{
+			resolvePrivacy: () =>
+				resolveChannelPrivacy(env, msg.teamId, botToken, channel),
+			backfill: () =>
+				backfillChannelMembers(agent, botToken, channel, Date.now()),
+		},
+	)
+}
+
+// The membership rules, with the Slack lookups injected so they can be tested.
+export async function applyMembershipEvent(
+	agent: CompanyBrainAgent,
+	event: { channel: string; user: string; isLeave: boolean; isBot: boolean },
+	lookups: {
+		resolvePrivacy: () => Promise<boolean | null>
+		backfill: () => Promise<number>
+	},
+): Promise<void> {
+	const { channel, user, isLeave, isBot } = event
 	ensureChannelMembershipTables(agent)
-	const now = Date.now()
 
 	// Revoking is always safe, so a leave never waits on the privacy lookup: if
 	// that fails, a removed member would keep reading the channel from a DM.
@@ -162,21 +183,15 @@ export async function runSlackMembershipEvent(
 		return
 	}
 
-	const isPrivate = await resolveChannelPrivacy(
-		env,
-		msg.teamId,
-		botToken,
-		channel,
-	)
-	if (isPrivate !== true) return
+	if ((await lookups.resolvePrivacy()) !== true) return
 
 	if (isBot) {
-		const count = await backfillChannelMembers(agent, botToken, channel, now)
+		const count = await lookups.backfill()
 		console.log(
 			`[company-brain][membership] bot joined private channel=${channel}; backfilled ${count} members`,
 		)
 	} else {
-		recordMembership(agent, channel, user, now)
+		recordMembership(agent, channel, user, Date.now())
 		console.log(
 			`[company-brain][membership] join channel=${channel} user=${user}`,
 		)
