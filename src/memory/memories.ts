@@ -45,9 +45,12 @@ const LIST_PAGE_SIZE = 100
 const BY_IDS_CHUNK = 100
 
 export function readStringArray(value: unknown): string[] {
-	if (Array.isArray(value)) return value.filter((v): v is string => typeof v === "string")
-	if (typeof value === "string" && value.trim()) return value.split(",").map((v) => v.trim())
-	return []
+	const items = Array.isArray(value)
+		? value.filter((v): v is string => typeof v === "string")
+		: typeof value === "string"
+			? value.split(",")
+			: []
+	return items.map((v) => v.trim()).filter(Boolean)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
