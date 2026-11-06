@@ -1,15 +1,17 @@
-import { DatabaseSync } from "node:sqlite"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
+import { ensureLeaseTables, hasOpenLeaseForServer } from "./store"
 
-vi.mock("../tools/mcp/store", () => ({ getConnectionById: async () => null }))
-vi.mock("../turn/agent", () => ({ brainAgent: () => ({ env: {} }) }))
-
-const { ensureLeaseTables, hasOpenLeaseForServer } = await import("./store")
+// The specifier is built at runtime because tsc has no declarations for bun:sqlite.
+const { Database } = (await import(["bun", "sqlite"].join(":"))) as {
+	Database: new (path: string) => {
+		prepare: (sql: string) => { all: (...v: unknown[]) => unknown[] }
+	}
+}
 
 function fakeAgent() {
-	const db = new DatabaseSync(":memory:")
+	const db = new Database(":memory:")
 	const sql = (strings: TemplateStringsArray, ...values: unknown[]) =>
-		db.prepare(strings.join("?")).all(...(values as never[]))
+		db.prepare(strings.join("?")).all(...values)
 	return { name: "org", sql } as never
 }
 
