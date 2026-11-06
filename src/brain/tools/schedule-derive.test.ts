@@ -1,37 +1,28 @@
-import { DatabaseSync } from "node:sqlite"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
+import { privateContainerTagFor } from "@/lib/spaces/provisioning"
+import { resolveBrainReadContainerTags } from "../memory/read-scope"
+import { slackMemoryContainerTag } from "../memory/writeback"
+import { ensureChannelMembershipTables } from "../slack/channel-membership"
+import type { CompanyBrainAgent } from "../turn/agent"
+import { scheduledRunMemoryScope } from "./schedule-derive"
 
-// Keep the Workers runtime out of the import graph; only the SQL path is real.
-vi.mock("../turn/agent", () => ({ brainAgent: () => ({ env: {} }) }))
-vi.mock("../slack/workspace", () => ({
-	getWorkspaceByTeamId: async () => undefined,
-	ensureWorkspaceBotUserId: async () => undefined,
-}))
-vi.mock("../slack/client", () => ({
-	getSlackConversationInfo: async () => undefined,
-	getConversationMembers: async () => [],
-}))
-vi.mock("../slack/channel-directory", () => ({
-	getChannelDirectory: async () => [],
-}))
-
-const { privateContainerTagFor } = await import("@/lib/spaces/provisioning")
-const { ensureChannelMembershipTables } = await import(
-	"../slack/channel-membership"
-)
-const { resolveBrainReadContainerTags } = await import("../memory/read-scope")
-const { slackMemoryContainerTag } = await import("../memory/writeback")
-const { scheduledRunMemoryScope } = await import("./schedule-derive")
+// A real SQLite stands in for the Durable Object's `sql` tag. The specifier is
+// built at runtime because tsc has no declarations for bun:sqlite.
+const { Database } = (await import(["bun", "sqlite"].join(":"))) as {
+	Database: new (path: string) => {
+		prepare: (sql: string) => { all: (...v: unknown[]) => unknown[] }
+	}
+}
 
 // The owner's two identities: the org member id keys their employee memory,
 // the Slack id resolves which private channels they belong to.
 const owner = { creatorUserId: "member_42", creatorSlackUserId: "U042" }
 
 function agentWhereOwnerIsIn(channelId: string) {
-	const db = new DatabaseSync(":memory:")
+	const db = new Database(":memory:")
 	const sql = (strings: TemplateStringsArray, ...values: unknown[]) =>
-		db.prepare(strings.join("?")).all(...(values as never[]))
-	const agent = { name: "org", sql } as never
+		db.prepare(strings.join("?")).all(...values)
+	const agent = { name: "org", sql } as unknown as CompanyBrainAgent
 	ensureChannelMembershipTables(agent)
 	sql`INSERT INTO brain_channel_membership (channel_id, slack_user_id, is_private, updated_at)
 		VALUES (${channelId}, ${owner.creatorSlackUserId}, 1, 1)`
