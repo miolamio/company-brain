@@ -1200,12 +1200,18 @@ export const slackRoutes = new Hono<AppContext>()
 			() => null,
 		)
 		if (!stateRaw) return c.json({ error: "invalid or expired state" }, 400)
-		await c.env.BRAIN_KV.delete(`slack:oauth:${state}`).catch(() => {})
 		const { orgId, userId, returnTo } = JSON.parse(stateRaw) as {
 			orgId: string
 			userId: string
 			returnTo?: string
 		}
+		// The callback must complete in the browser session that started the
+		// install; a forwarded link would otherwise bind the install to the
+		// initiator's org from someone else's browser.
+		if (c.get("user")?.id !== userId || c.get("org")?.id !== orgId) {
+			return c.json({ error: "install belongs to another session" }, 403)
+		}
+		await c.env.BRAIN_KV.delete(`slack:oauth:${state}`).catch(() => {})
 
 		const oauth = await exchangeSlackOAuth(c.env, code, callbackUrl(c.env))
 		const botTokenEnc = await encryptToken(
