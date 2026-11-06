@@ -1,20 +1,4 @@
-import { describe, expect, it, vi } from "vitest"
-
-vi.mock("../billing/cost", () => ({
-	BrainCostLedger: class {},
-	responseBodyFromResult: vi.fn(),
-	scheduleChargeBrainLlmCost: vi.fn(),
-}))
-
-vi.mock("../tools/mcp/access-intent", () => ({
-	requesterLacksPersonalAppAccess: vi.fn(),
-}))
-
-vi.mock("../turn/model-profile", () => ({
-	BRAIN_TRIAGE_EFFORT: "low",
-	TRIAGE_MODEL: "claude-haiku-4.5",
-	createModelProfile: vi.fn(),
-}))
+import { describe, expect, it } from "vitest"
 
 import { parseTriageResult } from "./triage"
 

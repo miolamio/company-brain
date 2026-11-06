@@ -8,10 +8,8 @@ Supermemory "Company Brain": a Slack teammate that remembers, answers, acts thro
 
 Use bun. This is a single package, and `web/` shares the root `package.json`. Scripts are in `package.json`. No linter, formatter or CI is configured, so `bun run check-types` is the main static check.
 
-- **Tests:** `bun test`, or `bun test src/db/migrations.test.ts` for one file and `bun test -t "<name>"` to filter by name. Test files import from `vitest`, and `bunfig.toml` preloads `test/workers-shim.ts` to mock `cloudflare:workers`.
-- **Known test failures:** neither runner passes the whole suite, and the failures are complementary, so run the other runner before blaming your change.
-  - `bun test`: `src/brain/slack/triage.test.ts` fails because `vi.mock` is undefined. It passes under vitest.
-  - `bun run test` (vitest, no config file): `src/brain/codemode/quickjs-executor.test.ts` and `src/brain/tools/mcp/catalog.test.ts` fail to load, because vitest resolves neither `cloudflare:` imports nor the tsconfig path aliases. Both pass under `bun test`.
+- **Tests:** `bun run test` (which is `bun test`), or `bun test src/db/migrations.test.ts` for one file and `bun test -t "<name>"` to filter by name. The whole suite passes. `bunfig.toml` preloads `test/workers-shim.ts` to stub `cloudflare:workers`.
+- **Writing tests:** import `describe`, `expect`, `it` and `vi.fn` from `vitest`, which bun maps to its own runner and which keeps `tsc` happy. Bun has no `vi.mock`. Prefer testing pure functions without module mocks, and use `mock.module` from `bun:test` only when a module truly has to be replaced. `bun:test` has no type declarations in this project, so `check-types` fails on it. Plain `vitest run` cannot load this suite: it resolves neither `cloudflare:` imports nor the tsconfig path aliases.
 - **Local run:** `cp .dev.vars.example .dev.vars`, fill in the keys, then `bun run dev`. For Slack to reach the machine, run a tunnel, set `PUBLIC_URL` to the tunnel URL, and create the Slack app from the tunnel's `/setup` page.
 - **Schema changes:** edit `src/db/schema/`, then run `bun run db:generate`. This writes the `drizzle/` SQL and rebundles it into `src/db/migrations.generated.ts`. `src/db/migrations.test.ts` fails if the two drift apart. The worker applies pending migrations itself on its next request (`ensureMigrated`), using the same `d1_migrations` table as wrangler.
 
