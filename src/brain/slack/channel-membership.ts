@@ -144,7 +144,7 @@ export async function runSlackMembershipEvent(
 
 	await applyMembershipEvent(
 		agent,
-		{ channel, user, isLeave, isBot },
+		{ channel, user, isLeave, isBot, botUnknown: !botUserId },
 		{
 			resolvePrivacy: () =>
 				resolveChannelPrivacy(env, msg.teamId, botToken, channel),
@@ -157,7 +157,14 @@ export async function runSlackMembershipEvent(
 // The membership rules, with the Slack lookups injected so they can be tested.
 export async function applyMembershipEvent(
 	agent: CompanyBrainAgent,
-	event: { channel: string; user: string; isLeave: boolean; isBot: boolean },
+	event: {
+		channel: string
+		user: string
+		isLeave: boolean
+		isBot: boolean
+		/** The bot's own user id could not be resolved, so `isBot` is unreliable. */
+		botUnknown?: boolean
+	},
 	lookups: {
 		resolvePrivacy: () => Promise<boolean | null>
 		backfill: () => Promise<number>
@@ -169,10 +176,12 @@ export async function applyMembershipEvent(
 	// Revoking is always safe, so a leave never waits on the privacy lookup: if
 	// that fails, a removed member would keep reading the channel from a DM.
 	if (isLeave) {
-		if (isBot) {
+		if (isBot || event.botUnknown) {
+			// With the bot id unknown, any leave might be the bot's. Purging the
+			// channel errs toward less access; the bot rejoining backfills it.
 			purgeChannel(agent, channel)
 			console.log(
-				`[company-brain][membership] bot left channel=${channel}; purged`,
+				`[company-brain][membership] ${isBot ? "bot" : "possible bot"} left channel=${channel}; purged`,
 			)
 		} else {
 			removeMembership(agent, channel, user)

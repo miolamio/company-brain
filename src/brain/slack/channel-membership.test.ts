@@ -59,6 +59,37 @@ describe("applyMembershipEvent", () => {
 		expect(readableSlackChannelContainerTagsForUser(agent, "U1")).toEqual([])
 	})
 
+	it("purges the channel on any leave when the bot id is unknown", async () => {
+		const agent = fakeAgent()
+		seed(agent)
+		agent.sql`
+			INSERT INTO brain_channel_membership (channel_id, slack_user_id, is_private, updated_at)
+			VALUES (${"C1"}, ${"U9"}, 1, ${0})
+		`
+		await applyMembershipEvent(
+			agent,
+			{ channel: "C1", user: "UBOT", isLeave: true, isBot: false, botUnknown: true },
+			{ resolvePrivacy: failingPrivacy, backfill: async () => 0 },
+		)
+		expect(readableSlackChannelContainerTagsForUser(agent, "U1")).toEqual([])
+		expect(readableSlackChannelContainerTagsForUser(agent, "U9")).toEqual([])
+	})
+
+	it("keeps other members when a known non-bot leaves", async () => {
+		const agent = fakeAgent()
+		seed(agent)
+		agent.sql`
+			INSERT INTO brain_channel_membership (channel_id, slack_user_id, is_private, updated_at)
+			VALUES (${"C1"}, ${"U9"}, 1, ${0})
+		`
+		await applyMembershipEvent(
+			agent,
+			{ channel: "C1", user: "U1", isLeave: true, isBot: false, botUnknown: false },
+			{ resolvePrivacy: failingPrivacy, backfill: async () => 0 },
+		)
+		expect(readableSlackChannelContainerTagsForUser(agent, "U9")).toHaveLength(1)
+	})
+
 	it("records a join only for a private channel", async () => {
 		const agent = fakeAgent()
 		ensureChannelMembershipTables(agent)
