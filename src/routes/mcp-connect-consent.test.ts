@@ -65,12 +65,16 @@ describe("canApproveConnect", () => {
 	})
 })
 
-function appFor(session: { id: string } | null, env: Env) {
+function appFor(
+	session: { id: string } | null,
+	env: Env,
+	role: string | null = null,
+) {
 	const app = new Hono<AppContext>()
 	app.use(async (c, next) => {
 		c.set("user", session as never)
 		c.set("org", session ? ({ id: ORG } as never) : null)
-		c.set("memberRole", null)
+		c.set("memberRole", role as never)
 		await next()
 	})
 	app.route("/", brainMcpConnectionsRoutes)
@@ -156,5 +160,71 @@ describe("GET /callback", () => {
 	it("rejects an unknown or already-consumed state", async () => {
 		const res = await appFor({ id: OWNER }, env)("/callback?code=x&state=gone")
 		expect(res.status).toBe(400)
+	})
+})
+
+describe("shared flows by role", () => {
+	const env = { DB: createTestD1() } as unknown as Env
+	const sharedState = {
+		userId: null,
+		context: { approval },
+	}
+
+	it("lets an admin or owner who started the flow approve a shared connection", async () => {
+		for (const role of ["admin", "owner"]) {
+			const token = `sh_${role}`
+			await seed(env, token, sharedState)
+			const res = await appFor({ id: OWNER }, env, role)(
+				`/authorize?state=${token}`,
+			)
+			expect(res.status).toBe(303)
+		}
+	})
+
+	it("refuses a plain member, or no role, on a shared connection", async () => {
+		for (const role of ["member", null]) {
+			const token = `shm_${role}`
+			await seed(env, token, sharedState)
+			const res = await appFor({ id: OWNER }, env, role)(
+				`/authorize?state=${token}`,
+			)
+			expect(res.status).toBe(403)
+			expect(res.headers.get("location")).toBeNull()
+		}
+	})
+
+	it("applies the same role check at the callback", async () => {
+		await seed(env, "shcb", sharedState)
+		const res = await appFor({ id: OWNER }, env, "member")(
+			"/callback?code=x&state=shcb",
+		)
+		expect(res.status).toBe(403)
+	})
+})
+
+describe("signed-out pages", () => {
+	const env = { DB: createTestD1() } as unknown as Env
+
+	it("explains the next step on /authorize and returns to the same link", async () => {
+		await seed(env, "pg_a")
+		const res = await appFor(null, env)("/authorize?state=pg_a")
+		expect(res.status).toBe(401)
+		expect(res.headers.get("content-type")).toContain("text/html")
+		const html = await res.text()
+		expect(html).toContain("same Slack account")
+		expect(html).toContain(
+			`/auth/slack/login?return_to=${encodeURIComponent("/brain/mcp-connections/authorize?state=pg_a")}`,
+		)
+	})
+
+	it("serves an HTML page, not JSON, on /callback and keeps the state", async () => {
+		await seed(env, "pg_cb")
+		const res = await appFor(null, env)("/callback?code=x&state=pg_cb")
+		expect(res.status).toBe(401)
+		expect(res.headers.get("content-type")).toContain("text/html")
+		const html = await res.text()
+		expect(html).toContain("approved access at the provider")
+		expect(html).toContain("open this link again")
+		expect(html).toContain("pg_cb")
 	})
 })

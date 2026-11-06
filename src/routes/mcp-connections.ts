@@ -69,6 +69,24 @@ function canManageShared(c: Context<AppContext>): boolean {
 	return role === ROLE_OWNER || role === ROLE_ADMIN
 }
 
+function escapeHtml(value: string): string {
+	return value.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`)
+}
+
+// Shown when the browser has no session. Returns to the same authorize link
+// after sign-in; the login route validates the path again.
+function signInPage(c: Context<AppContext>, state: string, afterProvider: boolean) {
+	const returnTo = `/brain/mcp-connections/authorize?state=${encodeURIComponent(state)}`
+	const href = `/auth/slack/login?return_to=${encodeURIComponent(returnTo)}`
+	const lead = afterProvider
+		? "You approved access at the provider, but this browser isn't signed in to Company Brain, so the connection wasn't saved."
+		: "This browser isn't signed in to Company Brain."
+	return c.html(
+		`<!doctype html><meta charset="utf-8"><title>Sign in</title><body style="font:16px system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem"><h1 style="font-size:1.3rem">Sign in to continue</h1><p>${lead}</p><p>Sign in with the same Slack account that started the connection, then open this link again.</p><p><a href="${escapeHtml(href)}">Sign in with Slack</a></p></body>`,
+		401,
+	)
+}
+
 function approveConnect(
 	c: Context<AppContext>,
 	state: typeof mcpOAuthState.$inferSelect,
@@ -291,10 +309,7 @@ export const brainMcpConnectionsRoutes = new Hono<AppContext>()
 			.limit(1)
 		if (!stateRow) return c.json({ error: "invalid or expired state" }, 400)
 		if (!c.get("user")) {
-			return c.html(
-				'<p>Sign in to Company Brain with your own account, then reopen the connection link.</p><a href="/auth/slack/login">Sign in</a>',
-				401,
-			)
+			return signInPage(c, state, false)
 		}
 		if (!approveConnect(c, stateRow))
 			return c.json({ error: "connection belongs to another account" }, 403)
@@ -326,8 +341,7 @@ export const brainMcpConnectionsRoutes = new Hono<AppContext>()
 				.where(eq(mcpOAuthState.stateToken, state))
 			return c.json({ error: "invalid or expired state" }, 400)
 		}
-		if (!c.get("user"))
-			return c.json({ error: "sign in and start a new connection" }, 401)
+		if (!c.get("user")) return signInPage(c, state, true)
 		if (!approveConnect(c, stateRow))
 			return c.json({ error: "connection belongs to another account" }, 403)
 		if (stateRow.runtime === "embedded") {
