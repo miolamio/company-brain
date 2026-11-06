@@ -1,3 +1,4 @@
+import type { mcpOAuthState } from "@repo/db/schema/brain/mcp"
 import type { McpCatalogEntry } from "@/lib/brain/tools/mcp/catalog"
 import { getDirectoryEntryBySlug } from "@/lib/brain/tools/mcp/directory"
 
@@ -31,4 +32,29 @@ export function directoryConnectUrlIsValid(
 	const entry = getDirectoryEntryBySlug(slug)
 	if (!entry?.url) return true
 	return serverUrl === undefined || sameServerUrl(serverUrl, entry.url)
+}
+
+type McpOAuthState = typeof mcpOAuthState.$inferSelect
+
+// An authorize link can be forwarded to someone else, and a provider callback
+// can be replayed into another browser. Both must be completed by the account
+// that started the flow, in the org it was started for. Shared flows have no
+// owning user, so they additionally need an owner or admin.
+export function canApproveConnect(
+	state: Pick<McpOAuthState, "orgId" | "userId" | "context">,
+	session: {
+		userId: string | null
+		orgId: string | null
+		canManageShared: boolean
+	},
+): boolean {
+	const approval = state.context?.approval
+	return Boolean(
+		approval?.authorizationUrl &&
+			session.userId &&
+			session.orgId &&
+			session.userId === approval.userId &&
+			session.orgId === state.orgId &&
+			(state.userId === null ? session.canManageShared : state.userId === session.userId),
+	)
 }

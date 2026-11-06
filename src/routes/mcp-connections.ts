@@ -57,6 +57,7 @@ import {
 import { decryptToken } from "@/lib/crypto"
 import type { AppContext } from "@/types"
 import {
+	canApproveConnect,
 	catalogConnectUrlIsValid,
 	directoryConnectUrlIsValid,
 } from "./mcp-connect-policy"
@@ -68,21 +69,15 @@ function canManageShared(c: Context<AppContext>): boolean {
 	return role === ROLE_OWNER || role === ROLE_ADMIN
 }
 
-function canApproveConnect(
+function approveConnect(
 	c: Context<AppContext>,
 	state: typeof mcpOAuthState.$inferSelect,
 ): boolean {
-	const user = c.get("user")
-	const org = c.get("org")
-	const approval = state.context?.approval
-	return Boolean(
-		approval?.authorizationUrl &&
-		user &&
-		org &&
-		user.id === approval.userId &&
-		org.id === state.orgId &&
-		(state.userId === null ? canManageShared(c) : state.userId === user.id),
-	)
+	return canApproveConnect(state, {
+		userId: c.get("user")?.id ?? null,
+		orgId: c.get("org")?.id ?? null,
+		canManageShared: canManageShared(c),
+	})
 }
 
 function orgHasBrain(org: BrainOrgLike | null | undefined): boolean {
@@ -301,7 +296,7 @@ export const brainMcpConnectionsRoutes = new Hono<AppContext>()
 				401,
 			)
 		}
-		if (!canApproveConnect(c, stateRow))
+		if (!approveConnect(c, stateRow))
 			return c.json({ error: "connection belongs to another account" }, 403)
 		const authorizationUrl = stateRow.context?.approval?.authorizationUrl
 		if (!authorizationUrl) return c.json({ error: "invalid state" }, 400)
@@ -333,7 +328,7 @@ export const brainMcpConnectionsRoutes = new Hono<AppContext>()
 		}
 		if (!c.get("user"))
 			return c.json({ error: "sign in and start a new connection" }, 401)
-		if (!canApproveConnect(c, stateRow))
+		if (!approveConnect(c, stateRow))
 			return c.json({ error: "connection belongs to another account" }, 403)
 		if (stateRow.runtime === "embedded") {
 			const consumed = await consumeGoogleOAuthState(c.env, state)
