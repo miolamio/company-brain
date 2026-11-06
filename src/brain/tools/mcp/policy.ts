@@ -4,7 +4,7 @@ import {
 	type McpOperationEffect,
 	operationIsRead,
 } from "./approval-classifier"
-import { queryToolCallHasDdl, queryToolCallHasDml } from "./sql-dml"
+import { queryToolCallHasDdl, queryToolCallHasDml } from "./sql-query-check"
 
 const METADATA_VERBS = new Set([
 	"capabilities",
